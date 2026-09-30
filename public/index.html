@@ -18,11 +18,13 @@
   .mic-btn:active { transform: scale(.95); box-shadow: 0 0 35px #ff3344; }
   .mic-btn:focus-visible { outline: 2px solid #ff3344; outline-offset: 6px; }
   .mic-btn.recording { animation: pulse 1.5s infinite; background: radial-gradient(circle, #b30000 0%, #800000 100%); border-color: #ff3344; }
-  .mic-btn:disabled { opacity: .6; cursor: wait; }
   @keyframes pulse { 0%,100% { box-shadow: 0 0 20px #4A0E17; } 50% { box-shadow: 0 0 40px #ff3344; } }
   @media (prefers-reduced-motion: reduce) { .mic-btn.recording { animation: none; box-shadow: 0 0 40px #ff3344; } }
   .mic-icon { font-size: 3rem; }
-  #transcript { margin-top: 30px; font-size: .9rem; color: #9a8a8c; min-height: 40px; white-space: pre-wrap; text-align: left; }
+  #transcript { margin-top: 30px; font-size: .9rem; color: #9a8a8c; min-height: 60px; white-space: pre-wrap; text-align: left; }
+  #typed { display: none; margin-top: 20px; gap: 8px; }
+  #typed input { flex: 1; padding: 10px; background: #1a0508; color: #f5e6e8; border: 1px solid #a84351; border-radius: 6px; font-family: inherit; }
+  #typed button { padding: 10px 14px; background: #800000; color: #f5e6e8; border: 1px solid #a84351; border-radius: 6px; font-family: inherit; }
 </style>
 </head>
 <body>
@@ -31,70 +33,82 @@
   <div class="status" id="status-text">MAROON CORE: ONLINE</div>
   <button class="mic-btn" id="mic-button" aria-label="Tap to talk"><span class="mic-icon">🎙️</span></button>
   <div id="transcript">Tap the orb and speak to FLDSMDFR, Ma'am.</div>
+  <form id="typed"><input id="typed-input" placeholder="Type to FLDSMDFR" autocomplete="off"><button>Send</button></form>
 </div>
 <script>
   const micBtn = document.getElementById('mic-button');
   const statusText = document.getElementById('status-text');
   const transcriptDiv = document.getElementById('transcript');
-  const API_URL = '/api/jarvis'; // change to your full backend URL if the page is hosted elsewhere
-  let recorder, chunks = [], history = [], mimeType = '';
+  const typedForm = document.getElementById('typed');
+  const typedInput = document.getElementById('typed-input');
+  const API_URL = '/api/chat';
+  let history = [], listening = false, recognition = null;
 
-  function pickMime() {
-    for (const t of ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']) {
-      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
-    }
-    return '';
-  }
-
-  micBtn.addEventListener('click', async () => {
-    if (recorder && recorder.state === 'recording') {
-      recorder.stop();
-      micBtn.classList.remove('recording');
-      micBtn.disabled = true;
-      statusText.innerText = 'PROCESSING COMMAND...';
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mimeType = pickMime();
-      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      chunks = [];
-      recorder.ondataavailable = e => chunks.push(e.data);
-      recorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        send(new Blob(chunks, { type: recorder.mimeType || mimeType }));
-      };
-      recorder.start();
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) {
+    recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.onstart = () => {
+      listening = true;
       micBtn.classList.add('recording');
       statusText.innerText = "FLDSMDFR IS LISTENING, MA'AM...";
-    } catch (err) {
-      statusText.innerText = 'MIC ACCESS DENIED';
-      transcriptDiv.innerText = 'Allow microphone access in your browser settings and use https or localhost.';
-    }
+    };
+    recognition.onend = () => { listening = false; micBtn.classList.remove('recording'); };
+    recognition.onerror = e => {
+      statusText.innerText = e.error === 'not-allowed' ? 'MIC ACCESS DENIED' : 'DIDN\'T CATCH THAT';
+    };
+    recognition.onresult = e => ask(e.results[0][0].transcript);
+  } else {
+    typedForm.style.display = 'flex';
+    transcriptDiv.innerText = "This browser can't hear me, Ma'am. Type below, or open me in Chrome.";
+  }
+
+  micBtn.addEventListener('click', () => {
+    speechSynthesis.cancel();
+    if (!recognition) return;
+    if (listening) recognition.stop(); else recognition.start();
   });
 
-  async function send(blob) {
-    const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
-    const form = new FormData();
-    form.append('audio', blob, 'speech.' + ext);
-    form.append('history', JSON.stringify(history));
+  typedForm.addEventListener('submit', e => {
+    e.preventDefault();
+    const t = typedInput.value.trim();
+    if (t) { typedInput.value = ''; ask(t); }
+  });
+
+  async function ask(text) {
+    statusText.innerText = 'PROCESSING COMMAND...';
     try {
-      const res = await fetch(API_URL, { method: 'POST', body: form });
-      const data = await res.json();
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, history }),
+      });
+      const raw = await res.text();
+      let data;
+      try { data = JSON.parse(raw); } catch (_) { throw new Error('Server replied ' + res.status + ': ' + raw.slice(0, 150)); }
       if (!res.ok) throw new Error(data.error || 'Request failed');
-      transcriptDiv.innerText = 'You: ' + data.input + '\nFLDSMDFR: ' + data.reply;
-      history.push({ role: 'user', content: data.input }, { role: 'assistant', content: data.reply });
+      transcriptDiv.innerText = 'You: ' + text + '\nFLDSMDFR: ' + data.reply;
+      history.push({ role: 'user', text }, { role: 'model', text: data.reply });
       history = history.slice(-10);
-      statusText.innerText = 'MAROON CORE: SPEAKING';
-      const audio = new Audio('data:audio/mp3;base64,' + data.audioBase64);
-      audio.onended = () => { statusText.innerText = 'MAROON CORE: IDLE'; };
-      await audio.play().catch(() => { statusText.innerText = 'MAROON CORE: IDLE'; });
+      speak(data.reply);
     } catch (e) {
       statusText.innerText = 'CORE ERROR DETECTED';
       transcriptDiv.innerText = 'Something went wrong reaching the maroon machine: ' + e.message;
-    } finally {
-      micBtn.disabled = false;
     }
+  }
+
+  function speak(text) {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.pitch = 0.6;
+    u.rate = 0.95;
+    const voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
+    const deep = voices.find(v => /male|daniel|david|google uk english male/i.test(v.name));
+    if (deep) u.voice = deep;
+    statusText.innerText = 'MAROON CORE: SPEAKING';
+    u.onend = () => { statusText.innerText = 'MAROON CORE: IDLE'; };
+    speechSynthesis.speak(u);
   }
 </script>
 </body>
