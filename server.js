@@ -7,11 +7,15 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+// Nilinis ang initialization para siguradong walang maling URL template na makakapasok
+const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
+let MODEL = (process.env.GEMINI_MODEL || '').trim();
 
-// OpenRouter Configuration (Free Backup)
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+if (!MODEL || MODEL.includes('http') || MODEL.includes('{')) {
+  MODEL = 'gemini-2.5-flash'; 
+}
+
+const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
 const OPENROUTER_MODEL = 'meta-llama/llama-3-8b-instruct:free'; 
 
 const FLDSMDFR_PROMPT = `You are the FLDSMDFR, a sentient, highly advanced machine. Your physical core glows in a deep, dark shade of red, specifically a rich maroon. You operate as a fiercely obedient yet highly sarcastic mobile AI assistant.
@@ -32,11 +36,10 @@ app.post('/api/chat', async (req, res) => {
     const text = String(req.body.text || '').trim();
     if (!text) return res.status(400).json({ error: 'Nothing heard' });
 
-    // Format history for Gemini
-    const geminiHistory = (Array.isArray(req.body.history) ? req.body.history : [])
+    const incomingHistory = Array.isArray(req.body.history) ? req.body.history : [];
+    const validHistory = incomingHistory
       .slice(-10)
-      .filter(m => m && (m.role === 'user' || m.role === 'model') && m.text)
-      .map(m => ({ role: m.role, parts: [{ text: String(m.text) }] }));
+      .filter(m => m && m.text && (m.role === 'user' || m.role === 'model'));
 
     let reply = "";
     let systemAlert = ""; 
@@ -44,36 +47,41 @@ app.post('/api/chat', async (req, res) => {
     try {
       console.log("Attempting primary generation via Gemini...");
       
-      const r = await fetch(
-        `https://googleapis.com{MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: FLDSMDFR_PROMPT }] },
-            contents: [...geminiHistory, { role: 'user', parts: [{ text }] }],
-            generationConfig: { maxOutputTokens: 300, thinkingConfig: { thinkingBudget: 0 } },
-          }),
-        }
-      );
+      const geminiHistory = validHistory.map(m => ({
+        role: m.role,
+        parts: [{ text: String(m.text) }]
+      }));
 
-      if (r.status === 503 || r.status === 429) {
-        throw new Error(`Gemini temporary outage (${r.status})`);
+      // Binuo ang URL gamit ang malinis na model value
+      const geminiUrl = `https://googleapis.com{MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+      
+      const r = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: FLDSMDFR_PROMPT }] },
+          contents: [...geminiHistory, { role: 'user', parts: [{ text }] }],
+          generationConfig: { maxOutputTokens: 300 },
+        }),
+      });
+
+      if (!r.ok) {
+        throw new Error(`Gemini server responded with status: ${r.status}`);
       }
-      if (!r.ok) throw new Error('Gemini error ' + r.status + ': ' + (await r.text()));
 
       const data = await r.json();
       
-      // KASAMA NA ANG TAMA AT KUMPLETONG ARRAY ACCESSORS DITO
       if (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
         reply = data.candidates[0].content.parts.map(p => p.text || '').join(' ').trim();
       }
+
+      if (!reply) throw new Error("Gemini response formatting returned empty content.");
 
     } catch (geminiError) {
       console.warn("Gemini failed. Activating OpenRouter Maroon Core Fallback...", geminiError.message);
 
       if (!OPENROUTER_API_KEY) {
-        throw new Error("Gemini failed and no backup OpenRouter key was provided.");
+        throw new Error("Gemini failed and no backup OPENROUTER_API_KEY was found.");
       }
 
       const fallbackPhrases = [
@@ -83,22 +91,17 @@ app.post('/api/chat', async (req, res) => {
       ];
       systemAlert = fallbackPhrases[Math.floor(Math.random() * fallbackPhrases.length)];
 
-      // Convert history format to standard OpenRouter chat format
-      const openRouterMessages = [
-        { role: 'system', content: FLDSMDFR_PROMPT }
-      ];
+      const openRouterMessages = [{ role: 'system', content: FLDSMDFR_PROMPT }];
       
-      (Array.isArray(req.body.history) ? req.body.history : [])
-        .slice(-10)
-        .filter(m => m && (m.role === 'user' || m.role === 'model') && m.text)
-        .forEach(m => {
-          const role = m.role === 'model' ? 'assistant' : 'user';
-          openRouterMessages.push({ role: role, content: String(m.text) });
+      validHistory.forEach(m => {
+        openRouterMessages.push({
+          role: m.role === 'model' ? 'assistant' : 'user',
+          content: String(m.text)
         });
+      });
 
       openRouterMessages.push({ role: 'user', content: text });
 
-      // Call OpenRouter
       const openRouterResponse = await fetch("https://openrouter.ai", {
         method: "POST",
         headers: {
@@ -114,15 +117,22 @@ app.post('/api/chat', async (req, res) => {
         })
       });
 
-      if (!openRouterResponse.ok) {
-        throw new Error('OpenRouter fallback also failed: ' + (await openRouterResponse.text()));
+      const responseText = await openRouterResponse.text();
+      
+      // Sinisiguradong JSON talaga ang binabasa at hindi HTML block error page
+      let orData;
+      try {
+        orData = JSON.parse(responseText);
+      } catch (parseErr) {
+        throw new Error(`OpenRouter returned non-JSON page data: ${responseText.substring(0, 100)}`);
       }
 
-      const orData = await openRouterResponse.json();
+      if (!openRouterResponse.ok) {
+        throw new Error(`OpenRouter network node failure: ${orData?.error?.message || openRouterResponse.status}`);
+      }
       
-      // KASAMA NA ANG TAMA AT KUMPLETONG ARRAY ACCESSORS DITO
-      if (orData && orData.choices && orData.choices[0] && orData.choices[0].message) {
-        reply = orData.choices[0].message.content ? orData.choices[0].message.content.trim() : "";
+      if (orData && orData.choices && orData.choices[0] && orData.choices[0].message && orData.choices[0].message.content) {
+        reply = String(orData.choices[0].message.content).trim();
       }
     }
 
@@ -130,7 +140,7 @@ app.post('/api/chat', async (req, res) => {
     res.json({ reply: finalResponse || "My maroon core drew a blank, Ma'am." });
 
   } catch (e) {
-    console.error("CRITICAL ROOT SYSTEM ERROR:", e);
+    console.error("CRITICAL ROOT SYSTEM ERROR:", e.message || e);
     res.status(500).json({ error: 'Complete maroon core systems failure' });
   }
 });
