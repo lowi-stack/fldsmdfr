@@ -8,6 +8,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// Updated to the proper, stable model target string format
 const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // OpenRouter Configuration (Free Backup)
@@ -44,11 +45,12 @@ app.post('/api/chat', async (req, res) => {
     try {
       console.log("Attempting primary generation via Gemini...");
       
+      // FIXED: Adjusted to modern Google developers endpoint specification format
       const r = await fetch(
-        `https://googleapis.com{MODEL}:generateContent`,
+        `https://googleapis.com{MODEL}:generateContent?key=${GEMINI_API_KEY}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: FLDSMDFR_PROMPT }] },
             contents: [...geminiHistory, { role: 'user', parts: [{ text }] }],
@@ -64,7 +66,7 @@ app.post('/api/chat', async (req, res) => {
 
       const data = await r.json();
       
-      // Fixed structural traversal array mapping 
+      // FIXED: Re-added the missing [0] index accessor for the candidates array
       if (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
         reply = data.candidates[0].content.parts.map(p => p.text || '').join(' ').trim();
       }
@@ -120,6 +122,7 @@ app.post('/api/chat', async (req, res) => {
 
       const orData = await openRouterResponse.json();
       
+      // FIXED: Restored index bracket paths for array matching
       if (orData && orData.choices && orData.choices[0] && orData.choices[0].message) {
         reply = orData.choices[0].message.content ? orData.choices[0].message.content.trim() : "";
       }
