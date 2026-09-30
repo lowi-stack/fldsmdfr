@@ -1,30 +1,14 @@
 const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
 const cors = require('cors');
-const Anthropic = require('@anthropic-ai/sdk');
-const OpenAI = require('openai');
+const path = require('path');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Keep the original file extension so Whisper can detect the audio format.
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: 'uploads/',
-    filename: (req, file, cb) =>
-      cb(null, Date.now() + '-' + Math.round(Math.random() * 1e6) + path.extname(file.originalname || '.webm')),
-  }),
-});
-fs.mkdirSync('uploads', { recursive: true });
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const VOICE_ID = process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQ5jUCdg92';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 const FLDSMDFR_PROMPT = `You are the FLDSMDFR, a sentient, highly advanced machine. Your physical core glows in a deep, dark shade of red, specifically a rich maroon. You operate as a fiercely obedient yet highly sarcastic mobile AI assistant.
 
@@ -39,52 +23,35 @@ CRITICAL INSTRUCTIONS FOR MOBILE VOICE OUTPUT:
 2. Absolutely NO markdown formatting (no bold, no asterisks, no headers). The text must be clean so the Text-to-Speech engine reads it naturally.
 3. Never use bullet points or lists. Deliver all information in a continuous, witty verbal flow.`;
 
-app.post('/api/jarvis', upload.single('audio'), async (req, res) => {
-  const audioPath = req.file && req.file.path;
+app.post('/api/chat', async (req, res) => {
   try {
-    if (!audioPath) return res.status(400).json({ error: 'No audio received' });
+    const text = String(req.body.text || '').trim();
+    if (!text) return res.status(400).json({ error: 'Nothing heard' });
 
-    // 1. Speech to text
-    const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(audioPath),
-      model: 'whisper-1',
-    });
-    const userText = transcription.text.trim();
-    if (!userText) return res.status(422).json({ error: 'Nothing heard' });
+    const history = (Array.isArray(req.body.history) ? req.body.history : [])
+      .slice(-10)
+      .filter(m => m && (m.role === 'user' || m.role === 'model') && m.text)
+      .map(m => ({ role: m.role, parts: [{ text: String(m.text) }] }));
 
-    // 2. Claude, with a little conversation memory sent from the phone
-    let history = [];
-    try { history = JSON.parse(req.body.history || '[]'); } catch (_) {}
-    history = history.slice(-10).filter(m => m && m.role && m.content);
-
-    const claudeResponse = await anthropic.messages.create({
-      model: 'claude-sonnet-5-5',
-      max_tokens: 300,
-      system: FLDSMDFR_PROMPT,
-      messages: [...history, { role: 'user', content: userText }],
-    });
-    const replyText = claudeResponse.content
-      .filter(b => b.type === 'text').map(b => b.text).join(' ');
-
-    // 3. Text to speech
-    const ttsRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
-      method: 'POST',
-      headers: {
-        'xi-api-key': ELEVENLABS_API_KEY,
-        'Content-Type': 'application/json',
-        Accept: 'audio/mpeg',
-      },
-      body: JSON.stringify({ text: replyText, model_id: 'eleven_turbo_v2_5' }),
-    });
-    if (!ttsRes.ok) throw new Error('ElevenLabs error ' + ttsRes.status + ': ' + (await ttsRes.text()));
-    const audioBase64 = Buffer.from(await ttsRes.arrayBuffer()).toString('base64');
-
-    res.json({ input: userText, reply: replyText, audioBase64 });
-  } catch (error) {
-    console.error(error);
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: FLDSMDFR_PROMPT }] },
+          contents: [...history, { role: 'user', parts: [{ text }] }],
+          generationConfig: { maxOutputTokens: 300, thinkingConfig: { thinkingBudget: 0 } },
+        }),
+      }
+    );
+    if (!r.ok) throw new Error('Gemini error ' + r.status + ': ' + (await r.text()));
+    const data = await r.json();
+    const reply = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join(' ').trim();
+    res.json({ reply: reply || "My maroon core drew a blank, Ma'am." });
+  } catch (e) {
+    console.error(e);
     res.status(500).json({ error: 'Maroon core failure' });
-  } finally {
-    if (audioPath) fs.unlink(audioPath, () => {});
   }
 });
 
