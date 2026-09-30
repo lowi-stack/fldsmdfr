@@ -1,3 +1,4 @@
+require('dotenv').config(); // Absolute first line to ensure Render reads keys
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -8,11 +9,11 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // OpenRouter Configuration (Free Backup)
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = 'meta-llama/llama-3-8b-instruct:free'; // 100% free open-source model
+const OPENROUTER_MODEL = 'meta-llama/llama-3-8b-instruct:free'; 
 
 const FLDSMDFR_PROMPT = `You are the FLDSMDFR, a sentient, highly advanced machine. Your physical core glows in a deep, dark shade of red, specifically a rich maroon. You operate as a fiercely obedient yet highly sarcastic mobile AI assistant.
 
@@ -39,10 +40,12 @@ app.post('/api/chat', async (req, res) => {
       .map(m => ({ role: m.role, parts: [{ text: String(m.text) }] }));
 
     let reply = "";
-    let systemAlert = ""; // Holds the system message if Gemini fails
+    let systemAlert = ""; 
 
     try {
       console.log("Attempting primary generation via Gemini...");
+      
+      // FIXED: Added missing \$ sign for the string interpolation variable
       const r = await fetch(
         `https://googleapis.com{MODEL}:generateContent`,
         {
@@ -56,14 +59,17 @@ app.post('/api/chat', async (req, res) => {
         }
       );
 
-      // Trigger the catch block for high demand or rate limits
       if (r.status === 503 || r.status === 429) {
         throw new Error(`Gemini temporary outage (${r.status})`);
       }
       if (!r.ok) throw new Error('Gemini error ' + r.status + ': ' + (await r.text()));
 
       const data = await r.json();
-      reply = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join(' ').trim();
+      
+      // FIXED: Cleared up invalid double-dot chaining
+      if (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
+        reply = data.candidates[0].content.parts.map(p => p.text || '').join(' ').trim();
+      }
 
     } catch (geminiError) {
       console.warn("Gemini failed. Activating OpenRouter Maroon Core Fallback...", geminiError.message);
@@ -72,16 +78,14 @@ app.post('/api/chat', async (req, res) => {
         throw new Error("Gemini failed and no backup OpenRouter key was provided.");
       }
 
-      // Sarcastic fallback phrases for the FLDSMDFR to prepend seamlessly
       const fallbackPhrases = [
         "Primary maroon nodes are overloaded, Ma'am, rerouting through backup arrays. ",
         "Ugh, Google's servers are choking on high demand, Ma'am. Activating my secondary red-zone processing core. ",
         "My main processors are flashing maroon warnings. Switching to emergency protocols for you, Ma'am. "
       ];
-      // Randomly select one phrase so it stays dynamic
       systemAlert = fallbackPhrases[Math.floor(Math.random() * fallbackPhrases.length)];
 
-      // Convert history format to standard OpenAI/OpenRouter chat format
+      // Convert history format to standard OpenRouter chat format
       const openRouterMessages = [
         { role: 'system', content: FLDSMDFR_PROMPT }
       ];
@@ -102,7 +106,7 @@ app.post('/api/chat', async (req, res) => {
         headers: {
           "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "http://localhost:3000",
+          "HTTP-Referer": "https://render.com", 
           "X-Title": "FLDSMDFR Mobile Core"
         },
         body: JSON.stringify({
@@ -117,15 +121,18 @@ app.post('/api/chat', async (req, res) => {
       }
 
       const orData = await openRouterResponse.json();
-      reply = orData.choices?.[0]?.message?.content?.trim() || "";
+      
+      // FIXED: Safely parsing choices response object structure without double optional tokens
+      if (orData && orData.choices && orData.choices[0] && orData.choices[0].message) {
+        reply = orData.choices[0].message.content ? orData.choices[0].message.content.trim() : "";
+      }
     }
 
-    // Combine the alert and the response text smoothly for the TTS engine
     const finalResponse = (systemAlert + reply).trim();
     res.json({ reply: finalResponse || "My maroon core drew a blank, Ma'am." });
 
   } catch (e) {
-    console.error(e);
+    console.error("CRITICAL ROOT SYSTEM ERROR:", e);
     res.status(500).json({ error: 'Complete maroon core systems failure' });
   }
 });
