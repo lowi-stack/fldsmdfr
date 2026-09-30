@@ -1,4 +1,3 @@
-require('dotenv').config(); // Absolute first line to ensure Render reads keys
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -45,7 +44,6 @@ app.post('/api/chat', async (req, res) => {
     try {
       console.log("Attempting primary generation via Gemini...");
       
-      // FIXED: Added missing \$ sign for the string interpolation variable
       const r = await fetch(
         `https://googleapis.com{MODEL}:generateContent`,
         {
@@ -66,7 +64,7 @@ app.post('/api/chat', async (req, res) => {
 
       const data = await r.json();
       
-      // FIXED: Cleared up invalid double-dot chaining
+      // Fixed structural traversal array mapping 
       if (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
         reply = data.candidates[0].content.parts.map(p => p.text || '').join(' ').trim();
       }
@@ -122,7 +120,6 @@ app.post('/api/chat', async (req, res) => {
 
       const orData = await openRouterResponse.json();
       
-      // FIXED: Safely parsing choices response object structure without double optional tokens
       if (orData && orData.choices && orData.choices[0] && orData.choices[0].message) {
         reply = orData.choices[0].message.content ? orData.choices[0].message.content.trim() : "";
       }
