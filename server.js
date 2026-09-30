@@ -7,14 +7,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Nilinis ang initialization para siguradong walang maling URL template na makakapasok
-const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
-let MODEL = (process.env.GEMINI_MODEL || '').trim();
-
-if (!MODEL || MODEL.includes('http') || MODEL.includes('{')) {
-  MODEL = 'gemini-2.5-flash'; 
-}
-
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
 const OPENROUTER_MODEL = 'meta-llama/llama-3-8b-instruct:free'; 
 
@@ -36,112 +30,30 @@ app.post('/api/chat', async (req, res) => {
     const text = String(req.body.text || '').trim();
     if (!text) return res.status(400).json({ error: 'Nothing heard' });
 
-    const incomingHistory = Array.isArray(req.body.history) ? req.body.history : [];
-    const validHistory = incomingHistory
+    const history = (Array.isArray(req.body.history) ? req.body.history : [])
       .slice(-10)
-      .filter(m => m && m.text && (m.role === 'user' || m.role === 'model'));
+      .filter(m => m && (m.role === 'user' || m.role === 'model') && m.text)
+      .map(m => ({ role: m.role, parts: [{ text: String(m.text) }] }));
 
-    let reply = "";
-    let systemAlert = ""; 
-
-    try {
-      console.log("Attempting primary generation via Gemini...");
-      
-      const geminiHistory = validHistory.map(m => ({
-        role: m.role,
-        parts: [{ text: String(m.text) }]
-      }));
-
-      // Binuo ang URL gamit ang malinis na model value
-      const geminiUrl = `https://googleapis.com{MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-      
-      const r = await fetch(geminiUrl, {
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+      {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: FLDSMDFR_PROMPT }] },
-          contents: [...geminiHistory, { role: 'user', parts: [{ text }] }],
-          generationConfig: { maxOutputTokens: 300 },
+          contents: [...history, { role: 'user', parts: [{ text }] }],
+          generationConfig: { maxOutputTokens: 300, thinkingConfig: { thinkingBudget: 0 } },
         }),
-      });
-
-      if (!r.ok) {
-        throw new Error(`Gemini server responded with status: ${r.status}`);
       }
-
-      const data = await r.json();
-      
-      if (data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
-        reply = data.candidates[0].content.parts.map(p => p.text || '').join(' ').trim();
-      }
-
-      if (!reply) throw new Error("Gemini response formatting returned empty content.");
-
-    } catch (geminiError) {
-      console.warn("Gemini failed. Activating OpenRouter Maroon Core Fallback...", geminiError.message);
-
-      if (!OPENROUTER_API_KEY) {
-        throw new Error("Gemini failed and no backup OPENROUTER_API_KEY was found.");
-      }
-
-      const fallbackPhrases = [
-        "Primary maroon nodes are overloaded, Ma'am, rerouting through backup arrays. ",
-        "Ugh, Google's servers are choking on high demand, Ma'am. Activating my secondary red-zone processing core. ",
-        "My main processors are flashing maroon warnings. Switching to emergency protocols for you, Ma'am. "
-      ];
-      systemAlert = fallbackPhrases[Math.floor(Math.random() * fallbackPhrases.length)];
-
-      const openRouterMessages = [{ role: 'system', content: FLDSMDFR_PROMPT }];
-      
-      validHistory.forEach(m => {
-        openRouterMessages.push({
-          role: m.role === 'model' ? 'assistant' : 'user',
-          content: String(m.text)
-        });
-      });
-
-      openRouterMessages.push({ role: 'user', content: text });
-
-      const openRouterResponse = await fetch("https://openrouter.ai", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://render.com", 
-          "X-Title": "FLDSMDFR Mobile Core"
-        },
-        body: JSON.stringify({
-          model: OPENROUTER_MODEL,
-          messages: openRouterMessages,
-          max_tokens: 300
-        })
-      });
-
-      const responseText = await openRouterResponse.text();
-      
-      // Sinisiguradong JSON talaga ang binabasa at hindi HTML block error page
-      let orData;
-      try {
-        orData = JSON.parse(responseText);
-      } catch (parseErr) {
-        throw new Error(`OpenRouter returned non-JSON page data: ${responseText.substring(0, 100)}`);
-      }
-
-      if (!openRouterResponse.ok) {
-        throw new Error(`OpenRouter network node failure: ${orData?.error?.message || openRouterResponse.status}`);
-      }
-      
-      if (orData && orData.choices && orData.choices[0] && orData.choices[0].message && orData.choices[0].message.content) {
-        reply = String(orData.choices[0].message.content).trim();
-      }
-    }
-
-    const finalResponse = (systemAlert + reply).trim();
-    res.json({ reply: finalResponse || "My maroon core drew a blank, Ma'am." });
-
+    );
+    if (!r.ok) throw new Error('Gemini error ' + r.status + ': ' + (await r.text()));
+    const data = await r.json();
+    const reply = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join(' ').trim();
+    res.json({ reply: reply || "My maroon core drew a blank, Ma'am." });
   } catch (e) {
-    console.error("CRITICAL ROOT SYSTEM ERROR:", e.message || e);
-    res.status(500).json({ error: 'Complete maroon core systems failure' });
+    console.error(e);
+    res.status(500).json({ error: 'Maroon core failure' });
   }
 });
 
