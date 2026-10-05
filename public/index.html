@@ -98,18 +98,59 @@
     }
   }
 
+  // ---- Voice: pick the most Jarvis-like voice this device has ----
+  let chosenVoice = null;
+  function pickVoice() {
+    const voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
+    if (!voices.length) return;
+    const prefs = [
+      /Ryan.*Online|Natural.*Ryan/i,          // Edge: Microsoft Ryan (UK) neural
+      /Thomas.*Online|George.*Online/i,        // Edge: other UK neural
+      /Daniel/i,                               // iPhone / Mac: Daniel (UK), the classic butler voice
+      /Google UK English Male/i,               // Chrome desktop and Android
+      /Arthur|Oliver|Malcolm/i,
+      /en-GB/i,
+      /male/i,
+      /Alex|Aaron|David|Mark|Guy/i,
+    ];
+    for (const p of prefs) {
+      const v = voices.find(v => p.test(v.name) || p.test(v.lang));
+      if (v) { chosenVoice = v; return; }
+    }
+    chosenVoice = voices[0];
+  }
+  speechSynthesis.onvoiceschanged = pickVoice;
+  pickVoice();
+
   function speak(text) {
     speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.pitch = 0.6;
-    u.rate = 0.95;
-    const voices = speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
-    const deep = voices.find(v => /male|daniel|david|google uk english male/i.test(v.name));
-    if (deep) u.voice = deep;
+    const clean = text.replace(/[*_#`~]/g, '').replace(/\s+/g, ' ').trim();
+    const u = new SpeechSynthesisUtterance(clean);
+    if (!chosenVoice) pickVoice();
+    if (chosenVoice) { u.voice = chosenVoice; u.lang = chosenVoice.lang; }
+    u.pitch = 0.85;   // slightly deeper, but not muddy
+    u.rate = 1.02;
     statusText.innerText = 'MAROON CORE: SPEAKING';
-    u.onend = () => { statusText.innerText = 'MAROON CORE: IDLE'; };
+    u.onend = () => {
+      statusText.innerText = 'MAROON CORE: IDLE';
+      if (handsFree && recognition && !listening) setTimeout(() => { try { recognition.start(); } catch (_) {} }, 400);
+    };
     speechSynthesis.speak(u);
   }
+
+  // ---- Hands-free mode: after I finish talking, I listen again ----
+  let handsFree = false;
+  const hfBtn = document.createElement('button');
+  hfBtn.id = 'hf';
+  hfBtn.textContent = 'HANDS-FREE: OFF';
+  hfBtn.style.cssText = 'margin-top:24px;padding:8px 14px;background:transparent;color:#a84351;border:1px solid #a84351;border-radius:6px;font-family:inherit;font-size:.8rem;cursor:pointer';
+  document.querySelector('.container').appendChild(hfBtn);
+  hfBtn.addEventListener('click', () => {
+    handsFree = !handsFree;
+    hfBtn.textContent = 'HANDS-FREE: ' + (handsFree ? 'ON' : 'OFF');
+    hfBtn.style.color = handsFree ? '#ff3344' : '#a84351';
+    if (!handsFree && recognition && listening) recognition.stop();
+  });
 </script>
 </body>
 </html>
