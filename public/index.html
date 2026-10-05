@@ -114,6 +114,11 @@
   function pickVoice() {
     const voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
     if (!voices.length) return;
+    populatePicker(voices);
+    let saved = null;
+    try { saved = localStorage.getItem('fldsmdfr-voice'); } catch (_) {}
+    const savedVoice = saved && voices.find(v => v.name === saved);
+    if (savedVoice) { chosenVoice = savedVoice; return; }
     const prefs = [
       /Ryan.*Online|Natural.*Ryan/i,          // Edge: Microsoft Ryan (UK) neural
       /Thomas.*Online|George.*Online/i,        // Edge: other UK neural
@@ -126,10 +131,11 @@
     ];
     for (const p of prefs) {
       const v = voices.find(v => p.test(v.name) || p.test(v.lang));
-      if (v) { chosenVoice = v; return; }
+      if (v) { chosenVoice = v; if (picker) picker.value = v.name; return; }
     }
     chosenVoice = voices[0];
   }
+  // (dropdown syncs after first pick)
   speechSynthesis.onvoiceschanged = pickVoice;
   pickVoice();
 
@@ -158,6 +164,33 @@
     };
     speechSynthesis.speak(u);
   }
+
+  // ---- Voice picker: choose any voice installed on this device ----
+  var picker = document.createElement('select');
+  picker.style.cssText = 'margin-top:20px;max-width:100%;padding:8px;background:#1a0508;color:#f5e6e8;border:1px solid #a84351;border-radius:6px;font-family:inherit;font-size:.8rem';
+  document.querySelector('.container').appendChild(picker);
+  function populatePicker(voices) {
+    if (!picker) return;
+    if (picker.dataset.filled === String(voices.length)) return;
+    picker.dataset.filled = String(voices.length);
+    picker.innerHTML = '';
+    voices.forEach(v => {
+      const o = document.createElement('option');
+      o.value = v.name;
+      o.textContent = v.name + ' (' + v.lang + ')';
+      picker.appendChild(o);
+    });
+    if (chosenVoice) picker.value = chosenVoice.name;
+  }
+  pickVoice();
+  picker.addEventListener('change', () => {
+    unlockSpeech();
+    const v = speechSynthesis.getVoices().find(v => v.name === picker.value);
+    if (!v) return;
+    chosenVoice = v;
+    try { localStorage.setItem('fldsmdfr-voice', v.name); } catch (_) {}
+    speak("Voice changed, Ma'am. How do I sound?");
+  });
 
   // ---- Hands-free mode: after I finish talking, I listen again ----
   let handsFree = false;
