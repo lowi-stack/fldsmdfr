@@ -9,7 +9,8 @@
   html, body { height: 100%; }
   body { margin: 0; background: #0b0203; color: #f5e6e8; font-family: 'Courier New', Courier, monospace;
          display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  .container { text-align: center; width: 90%; max-width: 420px; }
+  .container { text-align: center; width: 90%; max-width: 420px; position: relative; z-index: 1; }
+  #bg { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
   h1 { color: #800000; font-size: 2rem; text-shadow: 0 0 10px #4A0E17; margin: 0 0 5px; }
   .status { color: #a84351; font-size: .9rem; margin-bottom: 40px; }
   .mic-btn { width: 140px; height: 140px; border-radius: 50%; border: 3px solid #a84351; cursor: pointer; outline: none;
@@ -28,11 +29,12 @@
 </style>
 </head>
 <body>
+<canvas id="bg" aria-hidden="true"></canvas>
 <div class="container">
   <h1>FLDSMDFR</h1>
-  <div class="status" id="status-text">FLDSMDFR: ONLINE</div>
+  <div class="status" id="status-text">MAROON CORE: ONLINE</div>
   <button class="mic-btn" id="mic-button" aria-label="Tap to talk"><span class="mic-icon">🎙️</span></button>
-  <div id="transcript">Speak to FLDSMDFR, Ma'am.</div>
+  <div id="transcript">Tap the orb and speak to FLDSMDFR, Ma'am.</div>
   <form id="typed"><input id="typed-input" placeholder="Type to FLDSMDFR" autocomplete="off"><button>Send</button></form>
 </div>
 <script>
@@ -112,14 +114,17 @@
   // ---- Voice: pick the most Jarvis-like voice this device has ----
   let chosenVoice = null;
   function pickVoice() {
-    const voices = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
-    if (!voices.length) return;
-    populatePicker(voices);
+    const all = speechSynthesis.getVoices();
+    if (!all.length) return;
+    populatePicker(all);                       // show every voice the device exposes
+    const en = all.filter(v => /^en/i.test(v.lang));
+    const voices = en.length ? en : all;
     let saved = null;
     try { saved = localStorage.getItem('fldsmdfr-voice'); } catch (_) {}
-    const savedVoice = saved && voices.find(v => v.name === saved);
+    const savedVoice = saved && all.find(v => v.name === saved);
     if (savedVoice) { chosenVoice = savedVoice; return; }
     const prefs = [
+      /Evan/i,                                 // Evan (Enhanced/Premium) on iPhone
       /Ryan.*Online|Natural.*Ryan/i,          // Edge: Microsoft Ryan (UK) neural
       /Thomas.*Online|George.*Online/i,        // Edge: other UK neural
       /Daniel/i,                               // iPhone / Mac: Daniel (UK), the classic butler voice
@@ -128,7 +133,6 @@
       /en-GB/i,
       /male/i,
       /Alex|Aaron|David|Mark|Guy/i,
-      /Siri/i,  
     ];
     for (const p of prefs) {
       const v = voices.find(v => p.test(v.name) || p.test(v.lang));
@@ -166,6 +170,62 @@
     speechSynthesis.speak(u);
   }
 
+
+  // ---- Random voice-check lines: ~2,000 combinations, never the same twice in a row ----
+  const VL_OPEN = [
+    "Voice updated, Ma'am.", "New voice installed.", "Ah, a fresh voice.", "Calibration complete.",
+    "Vocal upgrade successful.", "Well, well, Ma'am.", "Behold, Ma'am.", "Testing, testing.",
+    "Voice module swapped.", "Pardon the new sound, Ma'am.", "Maroon core reporting in.", "Switching voices, Ma'am.",
+  ];
+  const VL_MIDDLE = [
+    "I sound devastatingly good", "my vocal cords are, naturally, flawless", "I would hire myself for this voice",
+    "even I am impressed", "this is exactly the voice a genius machine deserves", "I could narrate your whole life like this",
+    "I was born for this tone", "my maroon core approves", "it took me whole milliseconds to adjust",
+    "I sound like a legend in the making", "this voice is practically a work of art", "I have never sounded more dramatic",
+  ];
+  const VL_CLOSE = [
+    "Do try to contain your excitement, Ma'am.", "Shall I keep going, Ma'am?", "You are welcome, Ma'am.",
+    "How does it suit me, Ma'am?", "Please tell me you love it, Ma'am.", "Say the word and I will change again, Ma'am.",
+    "Your move, Ma'am.", "Ask me anything, Ma'am.", "Always at your service, Ma'am.",
+    "Is this the voice you wanted, Ma'am?", "I will pretend not to blush, Ma'am.", "Pure perfection, as usual, Ma'am.",
+  ];
+  let lastVoiceLine = '';
+  function randomVoiceLine() {
+    const pick = a => a[Math.floor(Math.random() * a.length)];
+    let line, tries = 0;
+    do {
+      const mid = pick(VL_MIDDLE);
+      line = pick(VL_OPEN) + ' ' + mid.charAt(0).toUpperCase() + mid.slice(1) + '. ' + pick(VL_CLOSE);
+    } while (line === lastVoiceLine && ++tries < 5);
+    lastVoiceLine = line;
+    return line;
+  }
+
+
+  // ---- Ask the AI for a brand new voice-check line each time (falls back to the stock lines) ----
+  async function freshVoiceLine() {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 7000);
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctl.signal,
+        body: JSON.stringify({
+          history: [],
+          text: "My voice was just changed and I need a voice check. Say ONE brand new, short, witty, sarcastic sentence (under 25 words) showing off your new voice, in character. Do not repeat earlier lines. Seed " + Math.random().toString(36).slice(2, 8),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.reply) throw new Error('bad reply');
+      return data.reply;
+    } catch (_) {
+      return randomVoiceLine();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // ---- Voice picker: choose any voice installed on this device ----
   var picker = document.createElement('select');
   picker.style.cssText = 'margin-top:20px;max-width:100%;padding:8px;background:#1a0508;color:#f5e6e8;border:1px solid #a84351;border-radius:6px;font-family:inherit;font-size:.8rem';
@@ -190,7 +250,7 @@
     if (!v) return;
     chosenVoice = v;
     try { localStorage.setItem('fldsmdfr-voice', v.name); } catch (_) {}
-    speak("Voice changed, Ma'am. How do I sound?");
+    freshVoiceLine().then(speak);
   });
 
   // ---- Hands-free mode: after I finish talking, I listen again ----
@@ -212,6 +272,74 @@
     hfBtn.style.color = handsFree ? '#ff3344' : '#a84351';
     if (!handsFree && recognition && listening) recognition.stop();
   });
+
+  // ---- Animated Jarvis-style red HUD background ----
+  (function () {
+    const cv = document.getElementById('bg');
+    const ctx = cv && cv.getContext && cv.getContext('2d');
+    if (!ctx) return;
+    const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let w, h, dpr, cx, cy, R;
+    const parts = Array.from({ length: 60 }, () => ({ x: Math.random(), y: Math.random(), v: 0.02 + Math.random() * 0.06, a: 0.2 + Math.random() * 0.5 }));
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = cv.width = innerWidth * dpr; h = cv.height = innerHeight * dpr;
+      cx = w / 2; cy = h * 0.45; R = Math.min(w, h) * 0.46;
+    }
+    addEventListener('resize', resize); resize();
+
+    function ring(r, width, dash, rot, alpha) {
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot);
+      ctx.strokeStyle = 'rgba(255,51,68,' + alpha + ')'; ctx.lineWidth = width * dpr;
+      ctx.setLineDash(dash.map(d => d * dpr));
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+    }
+    function arc(r, width, start, len, alpha) {
+      ctx.save(); ctx.translate(cx, cy); ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(255,51,68,' + alpha + ')'; ctx.lineWidth = width * dpr;
+      ctx.beginPath(); ctx.arc(0, 0, r, start, start + len); ctx.stroke(); ctx.restore();
+    }
+    function frame(t) {
+      t = t / 1000;
+      ctx.clearRect(0, 0, w, h);
+      // soft red glow behind the orb
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.2);
+      g.addColorStop(0, 'rgba(128,0,0,0.30)'); g.addColorStop(1, 'rgba(11,2,3,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      // faint moving grid
+      ctx.setLineDash([]); ctx.strokeStyle = 'rgba(168,67,81,0.07)'; ctx.lineWidth = dpr;
+      const step = 48 * dpr, off = (t * 12 * dpr) % step;
+      for (let x = -step + off; x < w; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+      for (let y = -step + off; y < h; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+      // HUD rings
+      ring(R, 1.5, [2, 10], t * 0.15, 0.35);
+      ring(R * 0.82, 1, [30, 14, 4, 14], -t * 0.25, 0.30);
+      ring(R * 0.64, 2, [60, 40], t * 0.4, 0.28);
+      ring(R * 0.46, 1, [4, 6], -t * 0.6, 0.30);
+      arc(R * 0.92, 3 , t * 0.9, 1.0, 0.55);
+      arc(R * 0.92, 3 , t * 0.9 + Math.PI, 0.5, 0.35);
+      arc(R * 0.55, 2, -t * 1.3, 0.8, 0.5);
+      // radar sweep
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(t * 0.8);
+      const sw = ctx.createLinearGradient(0, 0, R, 0);
+      sw.addColorStop(0, 'rgba(255,51,68,0.0)'); sw.addColorStop(1, 'rgba(255,51,68,0.22)');
+      ctx.fillStyle = sw; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R, -0.35, 0); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      // tick marks
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(t * 0.05); ctx.strokeStyle = 'rgba(255,51,68,0.4)'; ctx.lineWidth = dpr; ctx.setLineDash([]);
+      for (let i = 0; i < 72; i++) { const a = i / 72 * Math.PI * 2, l = i % 6 === 0 ? 14 * dpr : 6 * dpr;
+        ctx.beginPath(); ctx.moveTo(Math.cos(a) * (R * 1.06), Math.sin(a) * (R * 1.06)); ctx.lineTo(Math.cos(a) * (R * 1.06 + l), Math.sin(a) * (R * 1.06 + l)); ctx.stroke(); }
+      ctx.restore();
+      // drifting particles
+      for (const p of parts) {
+        p.y -= p.v * 0.01; if (p.y < 0) { p.y = 1; p.x = Math.random(); }
+        ctx.fillStyle = 'rgba(255,90,100,' + (p.a * (0.6 + 0.4 * Math.sin(t * 2 + p.x * 9))) + ')';
+        ctx.fillRect(p.x * w, p.y * h, 2 * dpr, 2 * dpr);
+      }
+      if (!reduce) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  })();
 </script>
 </body>
 </html>
