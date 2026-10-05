@@ -42,7 +42,7 @@
   const typedForm = document.getElementById('typed');
   const typedInput = document.getElementById('typed-input');
   const API_URL = '/api/chat';
-  let history = [], listening = false, recognition = null;
+  let history = [], listening = false, recognition = null, lastReply = '';
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
@@ -64,7 +64,17 @@
     transcriptDiv.innerText = "This browser can't hear me, Ma'am. Type below, or open me in Chrome.";
   }
 
+  let unlocked = false;
+  function unlockSpeech() {
+    if (unlocked) return;
+    unlocked = true;
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    speechSynthesis.speak(u);
+  }
+
   micBtn.addEventListener('click', () => {
+    unlockSpeech();
     speechSynthesis.cancel();
     if (!recognition) return;
     if (listening) recognition.stop(); else recognition.start();
@@ -91,6 +101,7 @@
       transcriptDiv.innerText = 'You: ' + text + '\nFLDSMDFR: ' + data.reply;
       history.push({ role: 'user', text }, { role: 'model', text: data.reply });
       history = history.slice(-10);
+      lastReply = data.reply;
       speak(data.reply);
     } catch (e) {
       statusText.innerText = 'CORE ERROR DETECTED';
@@ -135,6 +146,16 @@
       statusText.innerText = 'MAROON CORE: IDLE';
       if (handsFree && recognition && !listening) setTimeout(() => { try { recognition.start(); } catch (_) {} }, 400);
     };
+    u.volume = 1;
+    u.onerror = () => {
+      if (u.voice) {
+        const u2 = new SpeechSynthesisUtterance(clean);
+        u2.onend = u.onend;
+        speechSynthesis.speak(u2);
+      } else {
+        statusText.innerText = 'NO VOICE ON THIS DEVICE: TURN UP VOLUME / SILENT SWITCH';
+      }
+    };
     speechSynthesis.speak(u);
   }
 
@@ -145,6 +166,12 @@
   hfBtn.textContent = 'HANDS-FREE: OFF';
   hfBtn.style.cssText = 'margin-top:24px;padding:8px 14px;background:transparent;color:#a84351;border:1px solid #a84351;border-radius:6px;font-family:inherit;font-size:.8rem;cursor:pointer';
   document.querySelector('.container').appendChild(hfBtn);
+  const replay = document.createElement('button');
+  replay.textContent = 'REPLAY VOICE';
+  replay.style.cssText = hfBtn.style.cssText + ';margin-left:8px';
+  document.querySelector('.container').appendChild(replay);
+  replay.addEventListener('click', () => { unlockSpeech(); if (lastReply) speak(lastReply); });
+
   hfBtn.addEventListener('click', () => {
     handsFree = !handsFree;
     hfBtn.textContent = 'HANDS-FREE: ' + (handsFree ? 'ON' : 'OFF');
