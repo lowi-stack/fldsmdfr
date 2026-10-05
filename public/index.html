@@ -128,6 +128,7 @@
       /en-GB/i,
       /male/i,
       /Alex|Aaron|David|Mark|Guy/i,
+      /Siri/i,  
     ];
     for (const p of prefs) {
       const v = voices.find(v => p.test(v.name) || p.test(v.lang));
